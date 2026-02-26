@@ -4,7 +4,14 @@ from antialias import draw_line_distance
 from tqdm import tqdm
 from PIL import Image, ImageDraw
 
-def precalc(h, num_pegs, line_width=1):
+
+def _to_darkness_vector(image, h):
+    """Convert uint8 image (0=black,255=white) to darkness vector (0=white,255=black)."""
+    img = np.asarray(image, dtype=np.float64).reshape((h**2,))
+    return 255.0 - img
+
+
+def precalc(h, num_pegs, line_width=1, sparse=False):
     peg_pos = np.array([[
         h / 2 + h / 2 * math.cos(2 * math.pi * (x / num_pegs)), 
         h / 2 + h / 2 * math.sin(2 * math.pi * (x / num_pegs))
@@ -22,8 +29,13 @@ def precalc(h, num_pegs, line_width=1):
             end = peg_pos[j]
             draw_line_distance(M[index], start[0], start[1], end[0], end[1], line_width)
             index += 1
-    M = M.reshape((n_lines, h**2))
-    return M.transpose()
+    M = M.reshape((n_lines, h**2)).transpose()  # (h^2, n_lines)
+    # Flip to darkness basis: sparse-friendly (background ~= 0)
+    M = (255 - M).astype(np.float64)
+    if sparse:
+        from scipy.sparse import csc_matrix
+        return csc_matrix(M)
+    return M
 
 def render_image(M, x, h, threshold=0.5, line_width=1):
     """Render by drawing lines with draw_line_distance. Overlapping lines stay dark (multiplicative)."""
@@ -48,10 +60,37 @@ def render_image(M, x, h, threshold=0.5, line_width=1):
             line_idx += 1
     return canvas
 
+
+def render_exact(M, x, h, as_uint8=True):
+    """Render the exact linear regression reconstruction (no thresholding).
+
+    M is stored in darkness space (0=white, 255=black), so:
+      darkness = M @ x
+      image = 255 - darkness
+    """
+    darkness = M @ np.asarray(x, dtype=np.float64)
+    darkness = np.asarray(darkness, dtype=np.float64).reshape((h, h))
+    image = 255.0 - darkness
+    if as_uint8:
+        return np.rint(np.clip(image, 0, 255)).astype(np.uint8)
+    return image
+
 def solve(M, image, h):
     """Least-squares solve for x in M @ x ≈ image (M is tall, so no exact solution)."""
-    img = image.reshape((h**2,)).astype(np.float64)
-    x, *_ = np.linalg.lstsq(M.astype(np.float64), img, rcond=None)
+    if hasattr(M, "toarray"):
+        M = M.toarray()
+    b = _to_darkness_vector(image, h)
+    x, *_ = np.linalg.lstsq(M.astype(np.float64), b, rcond=None)
+    return x
+
+
+def solve_nnls(M, image, h):
+    """Non-negative least-squares solve for x in M @ x ≈ image with x >= 0."""
+    from scipy.optimize import nnls
+    if hasattr(M, "toarray"):
+        M = M.toarray()
+    b = _to_darkness_vector(image, h)
+    x, _ = nnls(M.astype(np.float64), b.astype(np.float64))
     return x
 
 
@@ -62,10 +101,12 @@ def solve_gpu(M, image, h):
         device = torch.device("cuda")
     else:
         device = torch.device("cpu")
+    if hasattr(M, "toarray"):
+        M = M.toarray()
     # lstsq is not implemented on MPS; running on CPU avoids NotImplementedError
     M_t = torch.from_numpy(M.astype(np.float64)).to(device)
-    img = image.reshape((h**2,)).astype(np.float64)
-    b = torch.from_numpy(img).to(device).unsqueeze(1)
+    b_np = _to_darkness_vector(image, h)
+    b = torch.from_numpy(b_np).to(device).unsqueeze(1)
     x, *_ = torch.linalg.lstsq(M_t, b, driver="gels")
     return x.squeeze(1).cpu().numpy()
 
@@ -75,9 +116,9 @@ def solve_sparse(M, image, h, show=False):
     Set show=True to print iteration progress (itn, normr) to the console."""
     from scipy.sparse import csc_matrix
     from scipy.sparse.linalg import lsmr
-    img = image.reshape((h**2,)).astype(np.float64)
+    b = _to_darkness_vector(image, h)
     M_sp = csc_matrix(M.astype(np.float64))
-    x = lsmr(M_sp, img, show=show)[0]
+    x = lsmr(M_sp, b, show=show)[0]
     return x
 
 
@@ -93,8 +134,8 @@ def circle_test(h):
     draw.circle((h//2, h//4), h//6, fill=0)
     return img
 
-def full_test(h, num_pegs, target_image, sparse=False):
-    M = precalc(h, num_pegs, line_width=0.3)
+def full_test(h, num_pegs, target_image, sparse=False, line_width=0.3):
+    M = precalc(h, num_pegs, line_width=line_width, sparse=sparse)
     if sparse:
         solved = solve_sparse(M, np.array(target_image), h)
     else:
