@@ -34,7 +34,7 @@ def greedy_solve(M, target, h, max_lines=None, line_width=1, verbose=True,
 
     Uses precalc's M (antialiased line images) for fast composition.
     Returns (x, selected_indices): x is binary array, selected_indices is list of
-    line indices in selection order (for recreating up to N lines).
+    line indices in selection order (use render_selected(..., n=k) for first k lines).
 
     Args:
         M: Precomputed matrix from matrix.precalc (h² × n_lines).
@@ -69,7 +69,8 @@ def greedy_solve(M, target, h, max_lines=None, line_width=1, verbose=True,
         if save_indices_path and selected:
             np.save(save_indices_path, np.array(selected, dtype=np.int64))
 
-    iterator = tqdm(iterable=range(n_lines), desc="greedy", disable=not verbose)
+    n_steps = min(n_lines, max_lines) if max_lines is not None else n_lines
+    iterator = tqdm(iterable=range(n_steps), desc="greedy", disable=not verbose)
     try:
         for _ in iterator:
             if max_lines is not None and len(selected) >= max_lines:
@@ -90,8 +91,6 @@ def greedy_solve(M, target, h, max_lines=None, line_width=1, verbose=True,
 
             best_pos = int(np.argmin(candidate_errors))
             best_new_error = float(candidate_errors[best_pos])
-            if best_new_error >= best_error:
-                break
 
             best_j = int(np.flatnonzero(available)[best_pos])
             x[best_j] = 1
@@ -131,6 +130,12 @@ def indices_to_x(selected_indices, n_lines, n=None):
     return x
 
 
+def render_selected(M, selected_indices, h, n=None, line_width=1):
+    """Render the first n lines from an ordered greedy selection (all if n is None)."""
+    x = indices_to_x(selected_indices, M.shape[1], n=n)
+    return matrix.render_image(M, x, h, threshold=0.5, line_width=line_width)
+
+
 def run(h, num_pegs, target_image, max_lines=None, line_width=1,
         live_display=False, display_throttle=1, save_indices_path=None):
     """Convenience: precalc + greedy + render.
@@ -152,7 +157,7 @@ def run(h, num_pegs, target_image, max_lines=None, line_width=1,
     if live_display and cv2 is not None:
         cv2.waitKey(0)
         cv2.destroyAllWindows()
-    return M, x, matrix.render_image(M, x, h, threshold=0.5, line_width=line_width), selected
+    return M, x, render_selected(M, selected, h, line_width=line_width), selected
 
 
 if __name__ == "__main__":
