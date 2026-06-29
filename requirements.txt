@@ -1,0 +1,18 @@
+# Core
+numpy>=2.0
+Pillow>=10.0
+tqdm>=4.66
+
+# Notebooks
+matplotlib>=3.8
+jupyter>=1.0
+ipykernel>=6.0
+
+# Solvers (NNLS, sparse least squares)
+scipy>=1.11
+
+# Optional: greedy live OpenCV preview
+# opencv-python>=4.8
+
+# Optional: GPU least-squares (matrix.solve_gpu)
+# torch>=2.0
